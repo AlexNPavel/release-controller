@@ -91,10 +91,11 @@ func TestCalculateReferenceMirrorImageStream(t *testing.T) {
 
 func TestReleaseTagFromForReferenceRelease(t *testing.T) {
 	testCases := []struct {
-		name       string
-		release    *releasecontroller.Release
-		expectFrom bool
-		expectSpec string
+		name            string
+		release         *releasecontroller.Release
+		expectFrom      bool
+		expectSpec      string
+		expectReference bool
 	}{
 		{
 			name: "reference release sets From with DockerImage pullspec",
@@ -119,8 +120,9 @@ func TestReleaseTagFromForReferenceRelease(t *testing.T) {
 					},
 				},
 			},
-			expectFrom: true,
-			expectSpec: "quay.io/openshift-release-dev/ocp-release-pull:" + releasecontroller.ReferencePayloadTagPrefix + "4.18.0-0.nightly-2025-01-15-120000",
+			expectFrom:      true,
+			expectSpec:      "quay.io/openshift-release-dev/ocp-release-pull:" + releasecontroller.ReferencePayloadTagPrefix + "4.18.0-0.nightly-2025-01-15-120000",
+			expectReference: true,
 		},
 		{
 			name: "non-reference release does not set From",
@@ -146,7 +148,8 @@ func TestReleaseTagFromForReferenceRelease(t *testing.T) {
 					Name: "4.18.0-0.ci",
 				},
 			},
-			expectFrom: false,
+			expectFrom:      false,
+			expectReference: false,
 		},
 		{
 			name: "reference spec tags without ReferenceRelease config does not set From",
@@ -169,7 +172,8 @@ func TestReleaseTagFromForReferenceRelease(t *testing.T) {
 					Name: "4.18.0-0.ci",
 				},
 			},
-			expectFrom: false,
+			expectFrom:      false,
+			expectReference: false,
 		},
 	}
 	for _, tc := range testCases {
@@ -178,7 +182,7 @@ func TestReleaseTagFromForReferenceRelease(t *testing.T) {
 
 			tag := imagev1.TagReference{
 				Name:         tagName,
-				Reference:    releasecontroller.HasReferenceSpecTags(tc.release.Source),
+				Reference:    releasecontroller.IsReferenceRelease(tc.release),
 				ImportPolicy: imagev1.TagImportPolicy{ImportMode: imagev1.ImportModePreserveOriginal},
 			}
 			if releasecontroller.IsReferenceRelease(tc.release) {
@@ -186,6 +190,10 @@ func TestReleaseTagFromForReferenceRelease(t *testing.T) {
 					Kind: "DockerImage",
 					Name: releasecontroller.ReleasePullSpec(tc.release, tag.Name),
 				}
+			}
+
+			if tag.Reference != tc.expectReference {
+				t.Errorf("expected Reference %v, got %v", tc.expectReference, tag.Reference)
 			}
 
 			if tc.expectFrom {
@@ -631,6 +639,58 @@ func TestBuildReferenceRemovalJob(t *testing.T) {
 		}
 		if !foundTo {
 			t.Errorf("expected to image %q in command args, got: %v", expectedTo, args)
+		}
+	})
+}
+
+func TestBuildReleaseNewCommand(t *testing.T) {
+	mirror := &imagev1.ImageStream{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "4.18-art-latest-2025-01-15-120000",
+			Namespace: "ocp",
+		},
+	}
+	name := "4.18.0-0.ci-2025-01-15-120000"
+	toImage := "registry.ci.openshift.org/ocp/release:4.18.0-0.ci-2025-01-15-120000"
+	referenceMode := "source"
+	manifestListMode := "true"
+	prefix := "set -euo pipefail\n"
+
+	t.Run("without reference tags uses from-image-stream", func(t *testing.T) {
+		cmd := buildReleaseNewCommand(prefix, false, mirror, name, toImage, referenceMode, manifestListMode)
+		joined := strings.Join(cmd, " ")
+		if !strings.Contains(joined, "--from-image-stream=") {
+			t.Errorf("expected --from-image-stream flag, got: %s", joined)
+		}
+		if strings.Contains(joined, "--from-image-stream-file") {
+			t.Errorf("did not expect --from-image-stream-file flag, got: %s", joined)
+		}
+		if strings.Contains(joined, "oc get imagestream") {
+			t.Errorf("did not expect imagestream fetch step, got: %s", joined)
+		}
+		for _, expected := range []string{name, mirror.Name, mirror.Namespace, toImage, referenceMode, manifestListMode} {
+			if !strings.Contains(joined, expected) {
+				t.Errorf("expected %q in command, got: %s", expected, joined)
+			}
+		}
+	})
+
+	t.Run("with reference tags uses from-image-stream-file", func(t *testing.T) {
+		cmd := buildReleaseNewCommand(prefix, true, mirror, name, toImage, referenceMode, manifestListMode)
+		joined := strings.Join(cmd, " ")
+		if !strings.Contains(joined, "--from-image-stream-file=") {
+			t.Errorf("expected --from-image-stream-file flag, got: %s", joined)
+		}
+		if !strings.Contains(joined, "oc get imagestream") {
+			t.Errorf("expected imagestream fetch step, got: %s", joined)
+		}
+		if strings.Contains(joined, "--from-image-stream=") {
+			t.Errorf("did not expect --from-image-stream flag, got: %s", joined)
+		}
+		for _, expected := range []string{mirror.Name, mirror.Namespace, name, toImage, referenceMode, manifestListMode} {
+			if !strings.Contains(joined, expected) {
+				t.Errorf("expected %q in command, got: %s", expected, joined)
+			}
 		}
 	})
 }

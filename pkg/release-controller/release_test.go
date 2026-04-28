@@ -228,6 +228,50 @@ func TestResolveCLIImage(t *testing.T) {
 			expectError:   true,
 			errorContains: "4.17-art-latest",
 		},
+		{
+			name: "local reference release (reference spec tags, no ReferenceRelease) uses mirror cli spec tag",
+			release: &Release{
+				Source: &imagev1.ImageStream{
+					Spec: imagev1.ImageStreamSpec{
+						Tags: []imagev1.TagReference{
+							{Name: "cli", Reference: true, From: &corev1.ObjectReference{Kind: "DockerImage", Name: "quay.io/org/cli@sha256:abc"}},
+						},
+					},
+				},
+				Config: &ReleaseConfig{},
+			},
+			mirror: &imagev1.ImageStream{
+				Spec: imagev1.ImageStreamSpec{
+					Tags: []imagev1.TagReference{
+						{Name: "cli", From: &corev1.ObjectReference{Kind: "DockerImage", Name: "quay.io/org/cli@sha256:abc"}},
+					},
+				},
+			},
+			expected: "quay.io/org/cli@sha256:abc",
+		},
+		{
+			name: "local reference release with no cli spec tag returns error",
+			release: &Release{
+				Source: &imagev1.ImageStream{
+					Spec: imagev1.ImageStreamSpec{
+						Tags: []imagev1.TagReference{
+							{Name: "installer", Reference: true, From: &corev1.ObjectReference{Kind: "DockerImage", Name: "quay.io/org/installer@sha256:def"}},
+						},
+					},
+				},
+				Config: &ReleaseConfig{},
+			},
+			mirror: &imagev1.ImageStream{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ocp", Name: "local-mirror"},
+				Spec: imagev1.ImageStreamSpec{
+					Tags: []imagev1.TagReference{
+						{Name: "installer", From: &corev1.ObjectReference{Kind: "DockerImage", Name: "quay.io/org/installer@sha256:def"}},
+					},
+				},
+			},
+			expectError:   true,
+			errorContains: "local-mirror",
+		},
 	}
 
 	t.Parallel()

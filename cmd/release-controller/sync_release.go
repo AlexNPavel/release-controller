@@ -19,6 +19,32 @@ import (
 	imagev1 "github.com/openshift/api/image/v1"
 )
 
+// buildReleaseNewCommand returns the container command for a release creation job.
+// When the source has reference spec tags the mirror's status is empty, so the
+// command fetches the imagestream spec from the API server and passes it via
+// --from-image-stream-file instead of --from-image-stream.
+func buildReleaseNewCommand(prefix string, hasReferenceTags bool, mirror *imagev1.ImageStream, name, toImage, referenceMode, manifestListMode string) []string {
+	if hasReferenceTags {
+		return []string{
+			"/bin/bash", "-c",
+			prefix + `
+			oc get imagestream "$1" -n "$2" -o yaml > /tmp/mirror-full.yaml
+			awk '/^status:/{s=1;next} s&&/^[^ ]/{s=0} !s' /tmp/mirror-full.yaml > /tmp/mirror.yaml
+			if [ ! -s /tmp/mirror.yaml ]; then echo "ERROR: mirror.yaml is empty after status stripping" >&2; exit 1; fi
+			oc adm release new "--name=$3" "--from-image-stream-file=/tmp/mirror.yaml" "--to-image=$4" "--reference-mode=$5" "--keep-manifest-list=$6"
+			`,
+			"", mirror.Name, mirror.Namespace, name, toImage, referenceMode, manifestListMode,
+		}
+	}
+	return []string{
+		"/bin/bash", "-c",
+		prefix + `
+		oc adm release new "--name=$1" "--from-image-stream=$2" "--namespace=$3" "--to-image=$4" "--reference-mode=$5" "--keep-manifest-list=$6"
+		`,
+		"", name, mirror.Name, mirror.Namespace, toImage, referenceMode, manifestListMode,
+	}
+}
+
 func (c *Controller) ensureReleaseJob(release *releasecontroller.Release, name string, mirror *imagev1.ImageStream) (*batchv1.Job, error) {
 	return c.ensureJob(name, nil, func() (*batchv1.Job, error) {
 		toImage := fmt.Sprintf("%s:%s", release.Target.Status.PublicDockerImageRepository, name)
@@ -34,14 +60,12 @@ func (c *Controller) ensureReleaseJob(release *releasecontroller.Release, name s
 			manifestListMode = "true"
 		}
 
-		job.Spec.Template.Spec.Containers[0].Command = []string{
-			"/bin/bash", "-c",
-			prefix + `
-			oc adm release new "--name=$1" "--from-image-stream=$2" "--namespace=$3" "--to-image=$4" "--reference-mode=$5" "--keep-manifest-list=$6"
-			`,
-			"",
-			name, mirror.Name, mirror.Namespace, toImage, release.Config.ReferenceMode, manifestListMode,
-		}
+		job.Spec.Template.Spec.Containers[0].Command = buildReleaseNewCommand(
+			prefix,
+			releasecontroller.HasReferenceSpecTags(release.Source),
+			mirror,
+			name, toImage, release.Config.ReferenceMode, manifestListMode,
+		)
 
 		job.Annotations[releasecontroller.ReleaseAnnotationSource] = mirror.Annotations[releasecontroller.ReleaseAnnotationSource]
 		job.Annotations[releasecontroller.ReleaseAnnotationTarget] = mirror.Annotations[releasecontroller.ReleaseAnnotationTarget]
@@ -88,16 +112,12 @@ func buildReferenceReleaseJob(release *releasecontroller.Release, name string, m
 		keepManifestList = "true"
 	}
 
-	job.Spec.Template.Spec.Containers[0].Command = []string{
-		"/bin/bash", "-c",
-		prefix + `
-			oc get imagestream "$1" -n "$2" -o yaml > /tmp/mirror-full.yaml
-			awk '/^status:/{s=1;next} s&&/^[^ ]/{s=0} !s' /tmp/mirror-full.yaml > /tmp/mirror.yaml
-			if [ ! -s /tmp/mirror.yaml ]; then echo "ERROR: mirror.yaml is empty after status stripping" >&2; exit 1; fi
-			oc adm release new "--name=$3" "--from-image-stream-file=/tmp/mirror.yaml" "--to-image=$4" "--reference-mode=$5" "--keep-manifest-list=$6"
-			`,
-		"", mirror.Name, mirror.Namespace, name, toImage, release.Config.ReferenceMode, keepManifestList,
-	}
+	job.Spec.Template.Spec.Containers[0].Command = buildReleaseNewCommand(
+		prefix,
+		true,
+		mirror,
+		name, toImage, release.Config.ReferenceMode, keepManifestList,
+	)
 
 	job.Annotations[releasecontroller.ReleaseAnnotationSource] = mirror.Annotations[releasecontroller.ReleaseAnnotationSource]
 	job.Annotations[releasecontroller.ReleaseAnnotationTarget] = mirror.Annotations[releasecontroller.ReleaseAnnotationTarget]

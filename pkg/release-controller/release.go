@@ -91,13 +91,13 @@ func ReleaseDefinition(is *imagev1.ImageStream, releaseConfigCache *lru.Cache, e
 		return nil, false, TerminalError{err}
 	}
 
-	if is.Status.PublicDockerImageRepository == "" && (cfg.ReferenceRelease == nil || !HasReferenceSpecTags(is) || len(is.Spec.Tags) == 0) {
+	if is.Status.PublicDockerImageRepository == "" && (!HasReferenceSpecTags(is) || len(is.Spec.Tags) == 0) {
 		klog.V(4).Infof("The release input has no public docker image repository, waiting")
 		return nil, false, nil
 	}
 
 	if len(is.Status.Tags) == 0 {
-		if len(is.Spec.Tags) > 0 && HasReferenceSpecTags(is) && cfg.ReferenceRelease != nil {
+		if len(is.Spec.Tags) > 0 && HasReferenceSpecTags(is) {
 			klog.V(4).Infof("The release input has no status tags, but has reference true spec tags, assuming reference-based release")
 		} else {
 			klog.V(4).Infof("The release input has no status tags, waiting")
@@ -635,7 +635,7 @@ func ResolveCLIImage(release *Release, mirror *imagev1.ImageStream) (string, err
 	if len(release.Config.OverrideCLIImage) > 0 {
 		return release.Config.OverrideCLIImage, nil
 	}
-	if IsReferenceRelease(release) {
+	if release.Source != nil && HasReferenceSpecTags(release.Source) {
 		if cliTag := FindSpecTag(mirror.Spec.Tags, "cli"); cliTag != nil && cliTag.From != nil && cliTag.From.Kind == "DockerImage" {
 			return cliTag.From.Name, nil
 		}
